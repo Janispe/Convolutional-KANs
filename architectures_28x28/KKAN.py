@@ -5,7 +5,12 @@ import torch.nn.functional as F
 sys.path.append('./kan_convolutional')
 
 from kan_convolutional.KANConv import KAN_Convolutional_Layer
-from kan_convolutional.KANLinear import KANLinear
+from kan_convolutional.KANLinear import (
+    KANLinear,
+    convert_kan_to_int8,
+    disable_kan_qat,
+    enable_kan_qat,
+)
 
 class KKAN_Small(nn.Module):
     def __init__(self, grid_size: int = 5):
@@ -57,6 +62,18 @@ class KKAN_Small(nn.Module):
         x = F.log_softmax(x, dim=1)
 
         return x
+
+    def enable_qat(self):
+        enable_kan_qat(self)
+        return self
+
+    def disable_qat(self):
+        disable_kan_qat(self)
+        return self
+
+    def convert_to_int8(self):
+        convert_kan_to_int8(self)
+        return self
 
 class KKAN_Convolutional_Network(nn.Module):
     def __init__(self, grid_size: int = 5):
@@ -110,4 +127,16 @@ class KKAN_Convolutional_Network(nn.Module):
         x = F.log_softmax(x, dim=1)
 
         return x
+    
+    def enable_qat(self):
+        enable_kan_qat(self)
+        return self
+
+    def disable_qat(self):
+        disable_kan_qat(self)
+        return self
+
+    def convert_to_int8(self):
+        convert_kan_to_int8(self)
+        return self
     
