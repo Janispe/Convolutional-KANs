@@ -22,12 +22,18 @@ class KANLinear(torch.nn.Module):
         base_activation=torch.nn.SiLU,
         grid_eps=0.02,
         grid_range=[-1, 1],
+        use_lut=False,
+        lut_size=512,
     ):
         super(KANLinear, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.grid_size = grid_size
         self.spline_order = spline_order
+        self.use_lut = use_lut
+        self.lut_size = lut_size
+        if self.use_lut and self.lut_size < 2:
+            raise ValueError("lut_size must be at least 2 when use_lut is enabled")
 
         h = (grid_range[1] - grid_range[0]) / grid_size
         grid = (
@@ -56,6 +62,10 @@ class KANLinear(torch.nn.Module):
         self.base_activation = base_activation()
         self.grid_eps = grid_eps
 
+        self.register_buffer("lut_points", None)
+        self.register_buffer("lut_bases", None)
+        self.register_buffer("_lut_grid_reference", None)
+
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -79,10 +89,13 @@ class KANLinear(torch.nn.Module):
             if self.enable_standalone_scale_spline:
                 # torch.nn.init.constant_(self.spline_scaler, self.scale_spline)
                 torch.nn.init.kaiming_uniform_(self.spline_scaler, a=math.sqrt(5) * self.scale_spline)
+        if self.use_lut:
+            self._rebuild_lut()
 
-    def b_splines(self, x: torch.Tensor):
+    def _eval_b_splines_exact(self, x: torch.Tensor):
         """
-        Compute the B-spline bases for the given input tensor.
+        Compute the B-spline bases for the given input tensor using the
+        recursive B-spline definition.
 
         Args:
             x (torch.Tensor): Input tensor of shape (batch_size, in_features).
@@ -95,6 +108,7 @@ class KANLinear(torch.nn.Module):
         grid: torch.Tensor = (
             self.grid
         )  # (in_features, grid_size + 2 * spline_order + 1)
+
         x = x.unsqueeze(-1)
         bases = ((x >= grid[:, :-1]) & (x < grid[:, 1:])).to(x.dtype)
         for k in range(1, self.spline_order + 1):
@@ -115,6 +129,63 @@ class KANLinear(torch.nn.Module):
         )
         return bases.contiguous()
 
+    def _rebuild_lut(self):
+        if not self.use_lut:
+            return
+        device = self.grid.device
+        dtype = self.grid.dtype
+        min_knots = self.grid[:, 0]
+        max_knots = self.grid[:, -1]
+        span = torch.clamp(max_knots - min_knots, min=1e-6)
+        base_lin = torch.linspace(0.0, 1.0, self.lut_size, device=device, dtype=dtype)
+        points = min_knots.unsqueeze(-1) + span.unsqueeze(-1) * base_lin.unsqueeze(0)
+        bases = self._eval_b_splines_exact(points.transpose(0, 1))
+        self.lut_points = points
+        self.lut_bases = bases.transpose(0, 1).contiguous()
+        self._lut_grid_reference = self.grid.detach().clone()
+
+    def _b_splines_from_lut(self, x: torch.Tensor):
+        assert self.lut_points is not None and self.lut_bases is not None
+        min_knots = self.grid[:, 0]
+        max_knots = self.grid[:, -1]
+        span = torch.clamp(max_knots - min_knots, min=1e-6)
+
+        normed = ((x - min_knots) / span).clamp(0.0, 1.0)
+        indices = normed * (self.lut_size - 1)
+        lower_idx = indices.floor().to(torch.long)
+        upper_idx = torch.clamp(lower_idx + 1, max=self.lut_size - 1)
+        mix = (indices - lower_idx.to(indices.dtype)).unsqueeze(-1)
+
+        lut = self.lut_bases.unsqueeze(0).expand(x.size(0), -1, -1, -1)
+        lower_idx_expanded = lower_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 1, lut.size(-1))
+        upper_idx_expanded = upper_idx.unsqueeze(-1).unsqueeze(-1).expand_as(lower_idx_expanded)
+        lower_val = torch.gather(lut, 2, lower_idx_expanded).squeeze(2)
+        upper_val = torch.gather(lut, 2, upper_idx_expanded).squeeze(2)
+        bases = lower_val + mix * (upper_val - lower_val)
+        return bases.contiguous()
+
+    def b_splines(self, x: torch.Tensor):
+        """
+        Compute the B-spline bases for the given input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, in_features).
+
+        Returns:
+            torch.Tensor: B-spline bases tensor of shape (batch_size, in_features, grid_size + spline_order).
+        """
+        assert x.dim() == 2 and x.size(1) == self.in_features
+        if self.use_lut:
+            if (
+                self.lut_points is None
+                or self.lut_bases is None
+                or self._lut_grid_reference is None
+                or not torch.equal(self._lut_grid_reference, self.grid)
+            ):
+                self._rebuild_lut()
+            return self._b_splines_from_lut(x)
+        return self._eval_b_splines_exact(x)
+
     def curve2coeff(self, x: torch.Tensor, y: torch.Tensor):
         """
         Compute the coefficients of the curve that interpolates the given points.
@@ -129,7 +200,7 @@ class KANLinear(torch.nn.Module):
         assert x.dim() == 2 and x.size(1) == self.in_features
         assert y.size() == (x.size(0), self.in_features, self.out_features)
 
-        A = self.b_splines(x).transpose(
+        A = self._eval_b_splines_exact(x).transpose(
             0, 1
         )  # (in_features, batch_size, grid_size + spline_order)
         B = y.transpose(0, 1)  # (in_features, batch_size, out_features)
@@ -172,6 +243,7 @@ class KANLinear(torch.nn.Module):
 
     @torch.no_grad()
     def update_grid(self, x: torch.Tensor, margin=0.01):
+        raise NotImplementedError("LUT is not implemented for update grid")
         assert x.dim() == 2 and x.size(1) == self.in_features
         batch = x.size(0)
 
