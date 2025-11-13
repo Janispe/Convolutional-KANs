@@ -23,7 +23,7 @@ class KANLinear(torch.nn.Module):
         grid_eps=0.02,
         grid_range=[-1, 1],
         use_lut=False,
-        lut_size=512,
+        lut_size=4,
     ):
         super(KANLinear, self).__init__()
         self.in_features = in_features
@@ -164,7 +164,28 @@ class KANLinear(torch.nn.Module):
         bases = lower_val + mix * (upper_val - lower_val)
         return bases.contiguous()
 
-    def b_splines(self, x: torch.Tensor):
+    def _b_splines_from_lut_no_gather(self, x: torch.Tensor):
+        assert self.lut_points is not None and self.lut_bases is not None
+        min_knots = self.grid[:, 0]
+        max_knots = self.grid[:, -1]
+        span = torch.clamp(max_knots - min_knots, min=1e-6)
+
+        normed = ((x - min_knots) / span).clamp(0.0, 1.0)
+        indices = normed * (self.lut_size - 1)
+        lower_idx = indices.floor().to(torch.long)
+        upper_idx = torch.clamp(lower_idx + 1, max=self.lut_size - 1)
+        mix = (indices - lower_idx.to(indices.dtype)).unsqueeze(-1)
+
+        lut = self.lut_bases.unsqueeze(0)  # (1, in_features, lut_size, coeff)
+        idx_range = torch.arange(self.lut_size, device=x.device).view(1, 1, -1)
+        lower_mask = (lower_idx.unsqueeze(-1) == idx_range).to(lut.dtype)
+        upper_mask = (upper_idx.unsqueeze(-1) == idx_range).to(lut.dtype)
+        lower_val = (lower_mask.unsqueeze(-1) * lut).sum(dim=2)
+        upper_val = (upper_mask.unsqueeze(-1) * lut).sum(dim=2)
+        bases = lower_val + mix * (upper_val - lower_val)
+        return bases.contiguous()
+
+    def b_splines(self, x: torch.Tensor, use_lut_no_gather: bool = True):
         """
         Compute the B-spline bases for the given input tensor.
 
@@ -173,16 +194,18 @@ class KANLinear(torch.nn.Module):
 
         Returns:
             torch.Tensor: B-spline bases tensor of shape (batch_size, in_features, grid_size + spline_order).
-        """
+            """
         assert x.dim() == 2 and x.size(1) == self.in_features
         if self.use_lut:
             if (
                 self.lut_points is None
                 or self.lut_bases is None
                 or self._lut_grid_reference is None
-                or not torch.equal(self._lut_grid_reference, self.grid)
+                #or not torch.equal(self._lut_grid_reference, self.grid)
             ):
                 self._rebuild_lut()
+            if use_lut_no_gather:
+                return self._b_splines_from_lut_no_gather(x)
             return self._b_splines_from_lut(x)
         return self._eval_b_splines_exact(x)
 
