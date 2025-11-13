@@ -29,3 +29,6 @@ train_model_generic(model, mnist_train, mnist_test,device,epochs = epochs, path=
 model = KKAN_Small(use_lut=False)
 
 train_model_generic(model, mnist_train, mnist_test,device,epochs = epochs, path="models/FashionMNIST_NoLUT")
+
+
+

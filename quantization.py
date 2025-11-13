@@ -27,6 +27,12 @@ from torchvision.datasets import FashionMNIST
 import os
 
 
+def _write_fx_graph(graph, path):
+    """Persist FX graph text so it can be inspected offline."""
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(str(graph))
+
+
 class AverageMeter(object):
     """Computes and stores the average and current value"""
     def __init__(self, name, fmt=':f'):
@@ -124,27 +130,29 @@ def quantize_kkan_small(model, dataset, num_samples: int = 100):
   example = (torch.randn(1, 1, 28, 28),)
 
   exported_model = torch.export.export(model, example).module()
+  _write_fx_graph(exported_model.graph, "fx_graph_exported.txt")
 
   quantizer = XNNPACKQuantizer()
   quantizer.set_global(get_symmetric_quantization_config())
 
   prepared_model = prepare_pt2e(exported_model, quantizer)
-  #print(prepared_model.graph)
+  _write_fx_graph(prepared_model.graph, "fx_graph_prepared.txt")
 
   calibrate(prepared_model, test_loader, num_samples)
 
   quantized_model = convert_pt2e(prepared_model)
+  _write_fx_graph(quantized_model.graph, "fx_graph_quantized.txt")
   #print(quantized_model)
   
   return quantized_model
 
 criterion = nn.CrossEntropyLoss()
 
-float_model = KKAN_Small(use_lut=False)
-float_model.load_state_dict(torch.load("models/FashionMNIST_NoLUT/KKAN (Small) (gs = 5, NoLUT).pt", weights_only=False).state_dict()) 
+float_model = KKAN_Small(use_lut=True)
+float_model.load_state_dict(torch.load("models/FashionMNIST_LUT/KKAN (Small) (gs = 5, LUT).pt", weights_only=False).state_dict()) 
 
-model = KKAN_Small(use_lut=False)
-model.load_state_dict(torch.load("models/FashionMNIST_NoLUT/KKAN (Small) (gs = 5, NoLUT).pt", weights_only=False).state_dict())
+model = KKAN_Small(use_lut=True)
+model.load_state_dict(torch.load("models/FashionMNIST_LUT/KKAN (Small) (gs = 5, LUT).pt", weights_only=False).state_dict())
 
 
 transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
@@ -176,4 +184,3 @@ data_loader_test = DataLoader(mnist_data_test, batch_size=1, shuffle=False)
 
 top1, top5 = evaluate(quantized_model, criterion, data_loader_test)
 print("[before serilaization] Evaluation accuracy on test dataset: %2.2f, %2.2f"%(top1.avg, top5.avg))
-

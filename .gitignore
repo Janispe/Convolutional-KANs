@@ -1,6 +1,6 @@
 *.gz
 *.mp4
-
+*.pt
 data
 __pycache__
 animation.py
