@@ -41,7 +41,7 @@ def train_model_generic(model, train_ds, test_ds,device,epochs= 15,path =  "driv
     print("Total time (min)",total_time/60)
     if not path is None:
         saving_path = os.path.join(path,model.name+".pt")
-        model =  torch.load(saving_path, map_location=torch.device(device))
+        model =  torch.load(saving_path, map_location=torch.device(device), weights_only=False)
         model.train_losses = all_train_loss
         model.test_losses = all_test_loss
         torch.save(model,saving_path)
