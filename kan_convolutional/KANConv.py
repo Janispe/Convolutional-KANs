@@ -24,7 +24,8 @@ class KAN_Convolutional_Layer(torch.nn.Module):
             base_activation=torch.nn.SiLU,
             grid_eps: float = 0.02,
             grid_range: tuple = [-1, 1],
-            device: str = "cpu"
+            device: str = "cpu",
+            use_lut: bool = False,
         ):
         """
         Kan Convolutional Layer with multiple convolutions
@@ -59,6 +60,7 @@ class KAN_Convolutional_Layer(torch.nn.Module):
         self.padding = padding
         self.convs = torch.nn.ModuleList()
         self.stride = stride
+        self.use_lut = use_lut
 
         
         # Create n_convs KAN_Convolution objects
@@ -77,6 +79,7 @@ class KAN_Convolutional_Layer(torch.nn.Module):
                     base_activation=base_activation,
                     grid_eps=grid_eps,
                     grid_range=grid_range,
+                    use_lut=use_lut,
                     # device = device ## changed device to be allocated as per the input device for pytorch DDP
                 )
             )
@@ -106,7 +109,8 @@ class KAN_Convolution(torch.nn.Module):
             base_activation=torch.nn.SiLU,
             grid_eps: float = 0.02,
             grid_range: tuple = [-1, 1],
-            device = "cpu"
+            device = "cpu",
+            use_lut: bool = False,
         ):
         """
         Args
@@ -129,7 +133,8 @@ class KAN_Convolution(torch.nn.Module):
             scale_spline=scale_spline,
             base_activation=base_activation,
             grid_eps=grid_eps,
-            grid_range=grid_range
+            grid_range=grid_range,
+            use_lut=use_lut,
         )
 
     def forward(self, x: torch.Tensor):
@@ -138,6 +143,5 @@ class KAN_Convolution(torch.nn.Module):
     
     def regularization_loss(self, regularize_activation=1.0, regularize_entropy=1.0):
         return sum( layer.regularization_loss(regularize_activation, regularize_entropy) for layer in self.layers)
-
 
 

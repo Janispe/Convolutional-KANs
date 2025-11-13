@@ -8,20 +8,22 @@ from kan_convolutional.KANConv import KAN_Convolutional_Layer
 from kan_convolutional.KANLinear import KANLinear
 
 class KKAN_Small(nn.Module):
-    def __init__(self, grid_size: int = 5):
+    def __init__(self, grid_size: int = 5, use_lut: bool = False):
         super().__init__()
         self.conv1 = KAN_Convolutional_Layer(in_channels=1,
             out_channels= 5,
             kernel_size= (3,3),
             grid_size = grid_size,
-            padding =(0,0)
+            padding =(0,0),
+            use_lut=use_lut,
         )
 
         self.conv2 = KAN_Convolutional_Layer(in_channels=5,
             out_channels= 5,
             kernel_size = (3,3),
             grid_size = grid_size,
-            padding =(0,0)
+            padding =(0,0),
+            use_lut=use_lut,
         )
 
         self.pool1 = nn.MaxPool2d(
@@ -41,8 +43,10 @@ class KKAN_Small(nn.Module):
             base_activation=nn.SiLU,
             grid_eps=0.02,
             grid_range=[0,1],
+            use_lut=use_lut,
         )
-        self.name = f"KKAN (Small) (gs = {grid_size})"
+        lut_flag = "LUT" if use_lut else "NoLUT"
+        self.name = f"KKAN (Small) (gs = {grid_size}, {lut_flag})"
 
 
     def forward(self, x):
