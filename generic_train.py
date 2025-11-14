@@ -49,3 +49,60 @@ def train_model_generic(model, train_ds, test_ds,device,epochs= 15,path =  "driv
     print("Test loss",all_test_loss)
 
     #return all_train_loss, all_test_loss, all_test_accuracy, all_test_precision, all_test_recall, all_test_f1
+
+
+def simple_epoch_train(model, train_ds, device, epochs=5, batch_size=64, lr=1e-3, test_ds=None):
+    model.to(device)
+    model.train()
+    loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    criterion = nn.CrossEntropyLoss()
+    train_losses = []
+    start_time = time.perf_counter()
+
+    for epoch in range(epochs):
+        cumulative_loss = 0.0
+        for inputs, targets in loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            optimizer.zero_grad()
+            logits = model(inputs)
+            loss = criterion(logits, targets)
+            loss.backward()
+            optimizer.step()
+            cumulative_loss += loss.item() * inputs.size(0)
+
+        avg_loss = cumulative_loss / len(loader.dataset)
+        train_losses.append(avg_loss)
+        print(f"[SimpleTrain] Epoch {epoch + 1}/{epochs} - loss: {avg_loss:.4f}")
+
+    test_loss = None
+    test_accuracy = None
+    if test_ds is not None:
+        model.eval()
+        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
+        total_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for inputs, targets in test_loader:
+                inputs, targets = inputs.to(device), targets.to(device)
+                logits = model(inputs)
+                loss = criterion(logits, targets)
+                total_loss += loss.item() * inputs.size(0)
+                preds = logits.argmax(dim=1)
+                correct += (preds == targets).sum().item()
+                total += targets.size(0)
+        test_loss = total_loss / len(test_loader.dataset)
+        test_accuracy = correct / total if total > 0 else 0.0
+        model.train()
+
+    training_time = time.perf_counter() - start_time
+
+    return {
+        "model": model,
+        "train_losses": train_losses,
+        "test_loss": test_loss,
+        "test_accuracy": test_accuracy,
+        "training_time_seconds": training_time,
+        "parameter_count": count_parameters(model),
+    }
