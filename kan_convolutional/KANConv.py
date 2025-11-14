@@ -26,6 +26,7 @@ class KAN_Convolutional_Layer(torch.nn.Module):
             grid_range: tuple = [-1, 1],
             device: str = "cpu",
             use_lut: bool = False,
+            lut_size: int = 4,
         ):
         """
         Kan Convolutional Layer with multiple convolutions
@@ -61,6 +62,7 @@ class KAN_Convolutional_Layer(torch.nn.Module):
         self.convs = torch.nn.ModuleList()
         self.stride = stride
         self.use_lut = use_lut
+        self.lut_size = lut_size
 
         
         # Create n_convs KAN_Convolution objects
@@ -80,6 +82,7 @@ class KAN_Convolutional_Layer(torch.nn.Module):
                     grid_eps=grid_eps,
                     grid_range=grid_range,
                     use_lut=use_lut,
+                    lut_size=lut_size,
                     # device = device ## changed device to be allocated as per the input device for pytorch DDP
                 )
             )
@@ -111,6 +114,7 @@ class KAN_Convolution(torch.nn.Module):
             grid_range: tuple = [-1, 1],
             device = "cpu",
             use_lut: bool = False,
+            lut_size: int = 4,
         ):
         """
         Args
@@ -135,6 +139,7 @@ class KAN_Convolution(torch.nn.Module):
             grid_eps=grid_eps,
             grid_range=grid_range,
             use_lut=use_lut,
+            lut_size=lut_size,
         )
 
     def forward(self, x: torch.Tensor):
@@ -143,5 +148,4 @@ class KAN_Convolution(torch.nn.Module):
     
     def regularization_loss(self, regularize_activation=1.0, regularize_entropy=1.0):
         return sum( layer.regularization_loss(regularize_activation, regularize_entropy) for layer in self.layers)
-
 
