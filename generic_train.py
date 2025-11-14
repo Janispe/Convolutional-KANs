@@ -23,10 +23,55 @@ def print_lut_memory_stats(model, prefix="[LUT]"):
     print(f"{prefix} LUT buffers currently occupy {lut_bytes} bytes ({lut_mebibytes:.2f} MiB).")
 
 
-def print_model_resource_stats(model):
+try:
+    from calflops import calculate_flops
+except ImportError:
+    calculate_flops = None
+
+
+def infer_sample_input_shape(dataset):
+    """
+    Attempt to derive a 1-sample input shape tuple from the dataset.
+    Returns None if the dataset is empty or not indexable.
+    """
+    try:
+        if len(dataset) == 0:
+            return None
+    except TypeError:
+        pass
+    try:
+        sample, _ = dataset[0]
+    except Exception:
+        return None
+    if not isinstance(sample, (torch.Tensor,)):
+        sample = torch.as_tensor(sample)
+    return (1, *sample.shape)
+
+
+def print_model_resource_stats(model, sample_input_shape=None):
     param_count = count_parameters(model)
     print(f"[Model] Trainable parameters: {param_count}")
     print_lut_memory_stats(model)
+    if sample_input_shape is None:
+        return
+    if calculate_flops is None:
+        print("[Model] calflops not available; skipping FLOP/MAC estimate.")
+        return
+    try:
+        flops, macs, params = calculate_flops(
+            model=model,
+            input_shape=sample_input_shape,
+            output_as_string=False,
+            output_precision=6,
+            include_backPropagation=True,
+            output_unit="G",
+            print_results=False,
+        )
+        print(f"[Model] FLOPs: {flops}G | MACs: {macs}G | Params(reported): {params}")
+        model.flops = flops
+        model.macs = macs
+    except Exception as exc:
+        print(f"[Model] Failed to compute FLOPs via calflops: {exc}")
 
 
 from evaluations import train_and_test_models
@@ -40,7 +85,8 @@ from torch.utils.data import DataLoader
 import numpy as np
 def train_model_generic(model, train_ds, test_ds,device,epochs= 15,path =  "drive/MyDrive/KANs/models"):
     model.to(device)
-    print_model_resource_stats(model)
+    sample_input_shape = infer_sample_input_shape(train_ds)
+    print_model_resource_stats(model, sample_input_shape)
 
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.8)
@@ -82,7 +128,8 @@ def train_model_generic(model, train_ds, test_ds,device,epochs= 15,path =  "driv
 
 def simple_epoch_train(model, train_ds, device, epochs=5, batch_size=64, lr=1e-3, test_ds=None):
     model.to(device)
-    print_model_resource_stats(model)
+    sample_input_shape = infer_sample_input_shape(train_ds)
+    print_model_resource_stats(model, sample_input_shape)
     model.train()
     loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -135,4 +182,6 @@ def simple_epoch_train(model, train_ds, device, epochs=5, batch_size=64, lr=1e-3
         "test_accuracy": test_accuracy,
         "training_time_seconds": training_time,
         "parameter_count": count_parameters(model),
+        "flops_G": getattr(model, "flops", None),
+        "macs_G": getattr(model, "macs", None),
     }
