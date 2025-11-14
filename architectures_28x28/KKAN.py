@@ -8,12 +8,13 @@ from kan_convolutional.KANConv import KAN_Convolutional_Layer
 from kan_convolutional.KANLinear import KANLinear
 
 class KKAN_Small(nn.Module):
-    def __init__(self, grid_size: int = 5, use_lut: bool = False):
+    def __init__(self, grid_size: int = 5, spline_order: int = 3, use_lut: bool = False):
         super().__init__()
         self.conv1 = KAN_Convolutional_Layer(in_channels=1,
             out_channels= 5,
             kernel_size= (3,3),
             grid_size = grid_size,
+            spline_order=spline_order,
             padding =(0,0),
             use_lut=use_lut,
         )
@@ -22,6 +23,7 @@ class KKAN_Small(nn.Module):
             out_channels= 5,
             kernel_size = (3,3),
             grid_size = grid_size,
+            spline_order=spline_order,
             padding =(0,0),
             use_lut=use_lut,
         )
@@ -36,7 +38,7 @@ class KKAN_Small(nn.Module):
             125,
             10,
             grid_size=grid_size,
-            spline_order=3,
+            spline_order=spline_order,
             scale_noise=0.01,
             scale_base=1,
             scale_spline=1,
@@ -46,7 +48,7 @@ class KKAN_Small(nn.Module):
             use_lut=use_lut,
         )
         lut_flag = "LUT" if use_lut else "NoLUT"
-        self.name = f"KKAN (Small) (gs = {grid_size}, {lut_flag})"
+        self.name = f"KKAN (Small) (gs = {grid_size}, so = {spline_order}, {lut_flag})"
 
 
     def forward(self, x):
