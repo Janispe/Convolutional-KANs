@@ -131,12 +131,12 @@ def save_results(results, output_path="results/compare_lut_metrics.jsonl"):
 
 experiment_results = []
 
-for spline in range(5):
+for spline in range(1,5):
     experiment_results.append(
         train_and_save_model(use_lut=False, save_dir="models/FashionMNIST_NoLUT", spline_order=spline, lut_size=4)
     )
 
-for spline in range(5):
+for spline in range(1,5):
     experiment_results.append(
         train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=spline, lut_size=4)
     )
