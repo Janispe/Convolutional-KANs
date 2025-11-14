@@ -1,5 +1,34 @@
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def get_model_lut_memory_bytes(model):
+    """
+    Return the total amount of memory (in bytes) currently used by LUT buffers.
+    """
+    total = 0
+    for module in model.modules():
+        lut_bytes_fn = getattr(module, "lut_memory_bytes", None)
+        if callable(lut_bytes_fn):
+            total += int(lut_bytes_fn())
+    return total
+
+
+def print_lut_memory_stats(model, prefix="[LUT]"):
+    lut_bytes = get_model_lut_memory_bytes(model)
+    if lut_bytes <= 0:
+        print(f"{prefix} Model is not using LUT buffers.")
+        return
+    lut_mebibytes = lut_bytes / (1024 ** 2)
+    print(f"{prefix} LUT buffers currently occupy {lut_bytes} bytes ({lut_mebibytes:.2f} MiB).")
+
+
+def print_model_resource_stats(model):
+    param_count = count_parameters(model)
+    print(f"[Model] Trainable parameters: {param_count}")
+    print_lut_memory_stats(model)
+
+
 from evaluations import train_and_test_models
 import torch.nn as nn
 import torch.optim as optim
@@ -11,7 +40,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 def train_model_generic(model, train_ds, test_ds,device,epochs= 15,path =  "drive/MyDrive/KANs/models"):
     model.to(device)
-    print("Params start",count_parameters(model))
+    print_model_resource_stats(model)
 
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.8)
@@ -53,6 +82,7 @@ def train_model_generic(model, train_ds, test_ds,device,epochs= 15,path =  "driv
 
 def simple_epoch_train(model, train_ds, device, epochs=5, batch_size=64, lr=1e-3, test_ds=None):
     model.to(device)
+    print_model_resource_stats(model)
     model.train()
     loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)

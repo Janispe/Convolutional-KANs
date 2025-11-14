@@ -209,6 +209,18 @@ class KANLinear(torch.nn.Module):
             return self._b_splines_from_lut(x)
         return self._eval_b_splines_exact(x)
 
+    def lut_memory_bytes(self) -> int:
+        """
+        Return the amount of memory (in bytes) occupied by the LUT buffers.
+        """
+        if not self.use_lut:
+            return 0
+        total = 0
+        for buf in (self.lut_points, self.lut_bases, self._lut_grid_reference):
+            if buf is not None:
+                total += buf.element_size() * buf.nelement()
+        return total
+
     def curve2coeff(self, x: torch.Tensor, y: torch.Tensor):
         """
         Compute the coefficients of the curve that interpolates the given points.
