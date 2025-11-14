@@ -24,10 +24,11 @@ mnist_test = FashionMNIST(root='./data', train=False, download=True, transform=t
 
 epochs = 10
 spline_order = 3
+lut_size = 4
 
 
-def train_and_save_model(use_lut: bool, save_dir: str, spline_order: int):
-    model = KKAN_Small(use_lut=use_lut, spline_order=spline_order)
+def train_and_save_model(use_lut: bool, save_dir: str, spline_order: int, lut_size: int):
+    model = KKAN_Small(use_lut=use_lut, spline_order=spline_order, lut_size=lut_size)
     result = simple_epoch_train(model, mnist_train, device, epochs=epochs, test_ds=mnist_test)
     trained_model = result["model"]
     trained_model.train_losses = result["train_losses"]
@@ -51,6 +52,23 @@ def train_and_save_model(use_lut: bool, save_dir: str, spline_order: int):
         f"time_min={trained_model.training_time:.2f}"
     )
 
+train_and_save_model(use_lut=False, save_dir="models/FashionMNIST_NoLUT", spline_order=0, lut_size=4)
+train_and_save_model(use_lut=False, save_dir="models/FashionMNIST_NoLUT", spline_order=1, lut_size=4)
+train_and_save_model(use_lut=False, save_dir="models/FashionMNIST_NoLUT", spline_order=2, lut_size=4)
+train_and_save_model(use_lut=False, save_dir="models/FashionMNIST_NoLUT", spline_order=3, lut_size=4)
+train_and_save_model(use_lut=False, save_dir="models/FashionMNIST_NoLUT", spline_order=4, lut_size=4)
 
-train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=spline_order)
-train_and_save_model(use_lut=False, save_dir="models/FashionMNIST_NoLUT", spline_order=spline_order)
+
+train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=0, lut_size=4)
+train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=1, lut_size=4)
+train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=2, lut_size=4)
+train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=3, lut_size=4)
+train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=4, lut_size=4)
+
+train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=3, lut_size=4)
+train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=3, lut_size=8)
+train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=3, lut_size=16)
+train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=3, lut_size=32)
+train_and_save_model(use_lut=True, save_dir="models/FashionMNIST_LUT", spline_order=3, lut_size=64)
+
+
