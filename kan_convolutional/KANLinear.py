@@ -204,7 +204,7 @@ class KANLinear(torch.nn.Module):
             raise RuntimeError("Failed to build spline bases for layer LUT")
         scaled = self.scaled_spline_weight  # (out, in, coeff)
         # layer_vals -> (in, lut_size, out)
-        layer_vals = torch.einsum("oic,ilc->ilo", scaled, self.lut_bases).permute(1, 2, 0)
+        layer_vals = torch.einsum("oic,ilc->ilo", scaled, self.lut_bases)
         self.layer_lut_values = layer_vals.contiguous()
         self.layer_lut_points = self.lut_points.detach().clone()
         self._layer_lut_grid_reference = self.grid.detach().clone()
@@ -314,13 +314,16 @@ class KANLinear(torch.nn.Module):
         upper_idx = torch.clamp(lower_idx + 1, max=self.lut_size - 1)
         mix = (indices - lower_idx.to(indices.dtype)).unsqueeze(-1)
 
-        lut = values.unsqueeze(0)  # (1, in, lut_size, out)
+        lut = values.unsqueeze(0).expand(x.size(0), -1, -1, -1)  # (batch, in, lut_size, out)
         lower_idx_expanded = lower_idx.unsqueeze(-1).unsqueeze(-1).expand(
             -1, -1, 1, self.out_features
         )
         upper_idx_expanded = upper_idx.unsqueeze(-1).unsqueeze(-1).expand_as(
             lower_idx_expanded
         )
+        #print("lut shape:", lut.shape)
+        #print("lower_idx_expanded shape:", lower_idx_expanded.shape)
+        
         lower_val = torch.gather(lut, 2, lower_idx_expanded).squeeze(2)
         upper_val = torch.gather(lut, 2, upper_idx_expanded).squeeze(2)
         interpolated = lower_val + mix * (upper_val - lower_val)
