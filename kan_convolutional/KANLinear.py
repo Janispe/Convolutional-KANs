@@ -49,6 +49,7 @@ class KANLinear(torch.nn.Module):
         grid_range=[-1, 1],
         use_lut=False,
         lut_size=4,
+        layer_lut_include_base=True,
     ):
         super(KANLinear, self).__init__()
         self.in_features = in_features
@@ -98,6 +99,7 @@ class KANLinear(torch.nn.Module):
         self.register_buffer("_layer_lut_grid_reference", None)
         self._layer_lut_dirty = True
         self._layer_lut_hook_handles = []
+        self.layer_lut_include_base = layer_lut_include_base
         self.register_load_state_dict_post_hook(
             lambda *_: self._mark_layer_lut_dirty()
         )
@@ -205,6 +207,11 @@ class KANLinear(torch.nn.Module):
         scaled = self.scaled_spline_weight  # (out, in, coeff)
         # layer_vals -> (in, lut_size, out)
         layer_vals = torch.einsum("oic,ilc->ilo", scaled, self.lut_bases)
+        if self.layer_lut_include_base:
+            base_weight_t = self.base_weight.transpose(0, 1)  # (in, out)
+            base_points = self.base_activation(self.lut_points)  # (in, lut_size)
+            base_vals = base_points.unsqueeze(-1) * base_weight_t.unsqueeze(1)
+            layer_vals = layer_vals + base_vals
         self.layer_lut_values = layer_vals.contiguous()
         self.layer_lut_points = self.lut_points.detach().clone()
         self._layer_lut_grid_reference = self.grid.detach().clone()
@@ -219,6 +226,11 @@ class KANLinear(torch.nn.Module):
             self._mark_layer_lut_dirty()
             return grad
 
+        def base_dirty_hook(grad):
+            if self.layer_lut_include_base:
+                self._mark_layer_lut_dirty()
+            return grad
+
         self._layer_lut_hook_handles.append(
             self.spline_weight.register_hook(dirty_hook)
         )
@@ -226,6 +238,9 @@ class KANLinear(torch.nn.Module):
             self._layer_lut_hook_handles.append(
                 self.spline_scaler.register_hook(dirty_hook)
             )
+        self._layer_lut_hook_handles.append(
+            self.base_weight.register_hook(base_dirty_hook)
+        )
 
     def _b_splines_from_lut(self, x: torch.Tensor):
         assert self.lut_points is not None and self.lut_bases is not None
@@ -388,12 +403,29 @@ class KANLinear(torch.nn.Module):
             else 1.0
         )
 
+    @property
+    def layer_lut_include_base(self) -> bool:
+        return self._layer_lut_include_base
+
+    @layer_lut_include_base.setter
+    def layer_lut_include_base(self, value: bool):
+        new_value = bool(value)
+        old_value = getattr(self, "_layer_lut_include_base", None)
+        if old_value is not None and new_value == old_value:
+            return
+        self._layer_lut_include_base = new_value
+        if hasattr(self, "_layer_lut_dirty"):
+            self._mark_layer_lut_dirty()
+
     def forward(self, x: torch.Tensor):
         assert x.size(-1) == self.in_features
         original_shape = x.shape
         x = x.reshape(-1, self.in_features)
 
-        base_output = F.linear(self.base_activation(x), self.base_weight)
+        compute_base = not (self.use_layer_lut and self.layer_lut_include_base)
+        base_output = (
+            F.linear(self.base_activation(x), self.base_weight) if compute_base else None
+        )
         if self.use_layer_lut:
             spline_output = self._layer_lut_forward(x)
         else:
@@ -401,7 +433,7 @@ class KANLinear(torch.nn.Module):
                 self.b_splines(x).view(x.size(0), -1),
                 self.scaled_spline_weight.view(self.out_features, -1),
             )
-        output = base_output + spline_output
+        output = spline_output if base_output is None else base_output + spline_output
         
         output = output.reshape(*original_shape[:-1], self.out_features)
         return output
