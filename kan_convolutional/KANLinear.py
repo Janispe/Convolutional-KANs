@@ -1,11 +1,36 @@
 import torch
 import torch.nn.functional as F
 import math
+from typing import Union
 
 
-import torch
-import torch.nn.functional as F
-import math
+def _normalize_lut_mode(use_lut: Union[bool, int, str]) -> str:
+    """
+    Map the use_lut argument to one of: 'none', 'basis', or 'layer'.
+    """
+    if isinstance(use_lut, bool):
+        return "basis" if use_lut else "none"
+    if isinstance(use_lut, int):
+        mapping = {0: "none", 1: "basis", 2: "layer"}
+        if use_lut not in mapping:
+            raise ValueError(f"Unsupported LUT mode index: {use_lut}")
+        return mapping[use_lut]
+    if isinstance(use_lut, str):
+        lowered = use_lut.lower()
+        aliases = {
+            "none": "none",
+            "off": "none",
+            "basis": "basis",
+            "spline": "basis",
+            "table": "basis",
+            "layer": "layer",
+            "full": "layer",
+            "kanlinear": "layer",
+        }
+        if lowered not in aliases:
+            raise ValueError(f"Unsupported LUT mode string: {use_lut}")
+        return aliases[lowered]
+    raise TypeError(f"use_lut must be bool, int, or str, got {type(use_lut)}")
 
 
 class KANLinear(torch.nn.Module):
@@ -30,7 +55,10 @@ class KANLinear(torch.nn.Module):
         self.out_features = out_features
         self.grid_size = grid_size
         self.spline_order = spline_order
-        self.use_lut = use_lut
+        self.lut_mode = _normalize_lut_mode(use_lut)
+        self.use_lut = self.lut_mode != "none"
+        self.use_basis_lut = self.lut_mode == "basis"
+        self.use_layer_lut = self.lut_mode == "layer"
         self.lut_size = lut_size
         if self.use_lut and self.lut_size < 2:
             raise ValueError("lut_size must be at least 2 when use_lut is enabled")
@@ -65,8 +93,19 @@ class KANLinear(torch.nn.Module):
         self.register_buffer("lut_points", None)
         self.register_buffer("lut_bases", None)
         self.register_buffer("_lut_grid_reference", None)
+        self.register_buffer("layer_lut_values", None)
+        self.register_buffer("layer_lut_points", None)
+        self.register_buffer("_layer_lut_grid_reference", None)
+        self._layer_lut_dirty = True
+        self._layer_lut_hook_handles = []
+        self.register_load_state_dict_post_hook(
+            lambda *_: self._mark_layer_lut_dirty()
+        )
 
         self.reset_parameters()
+        if self.use_layer_lut:
+            self._setup_layer_lut_hooks()
+
 
     def reset_parameters(self):
         torch.nn.init.kaiming_uniform_(self.base_weight, a=math.sqrt(5) * self.scale_base)
@@ -89,8 +128,13 @@ class KANLinear(torch.nn.Module):
             if self.enable_standalone_scale_spline:
                 # torch.nn.init.constant_(self.spline_scaler, self.scale_spline)
                 torch.nn.init.kaiming_uniform_(self.spline_scaler, a=math.sqrt(5) * self.scale_spline)
+        self._mark_layer_lut_dirty()
         if self.use_lut:
             self._rebuild_lut()
+        if self.use_layer_lut:
+            self.layer_lut_values = None
+            self.layer_lut_points = None
+            self._layer_lut_grid_reference = None
 
     def _eval_b_splines_exact(self, x: torch.Tensor):
         """
@@ -129,8 +173,8 @@ class KANLinear(torch.nn.Module):
         )
         return bases.contiguous()
 
-    def _rebuild_lut(self):
-        if not self.use_lut:
+    def _rebuild_lut(self, force: bool = False):
+        if not (self.use_basis_lut or self.use_layer_lut or force):
             return
         device = self.grid.device
         dtype = self.grid.dtype
@@ -143,6 +187,45 @@ class KANLinear(torch.nn.Module):
         self.lut_points = points
         self.lut_bases = bases.transpose(0, 1).contiguous()
         self._lut_grid_reference = self.grid.detach().clone()
+        return self.lut_points, self.lut_bases
+
+    @torch.no_grad()
+    def rebuild_layer_lut(self, force: bool = False):
+        """
+        Build the layer-level LUT that maps input scalars directly to the
+        spline contribution for each output channel.
+        """
+        if not (self.use_layer_lut or force):
+            raise RuntimeError("Layer LUT requested but lut_mode!='layer'")
+        if self.lut_size < 2:
+            raise ValueError("Need at least two entries to build a layer LUT")
+        self._rebuild_lut(force=True)
+        if self.lut_bases is None or self.lut_points is None:
+            raise RuntimeError("Failed to build spline bases for layer LUT")
+        scaled = self.scaled_spline_weight  # (out, in, coeff)
+        # layer_vals -> (in, lut_size, out)
+        layer_vals = torch.einsum("oic,ilc->ilo", scaled, self.lut_bases).permute(1, 2, 0)
+        self.layer_lut_values = layer_vals.contiguous()
+        self.layer_lut_points = self.lut_points.detach().clone()
+        self._layer_lut_grid_reference = self.grid.detach().clone()
+        self._layer_lut_dirty = False
+        return self.layer_lut_values
+
+    def _mark_layer_lut_dirty(self, *_):
+        self._layer_lut_dirty = True
+
+    def _setup_layer_lut_hooks(self):
+        def dirty_hook(grad):
+            self._mark_layer_lut_dirty()
+            return grad
+
+        self._layer_lut_hook_handles.append(
+            self.spline_weight.register_hook(dirty_hook)
+        )
+        if self.enable_standalone_scale_spline:
+            self._layer_lut_hook_handles.append(
+                self.spline_scaler.register_hook(dirty_hook)
+            )
 
     def _b_splines_from_lut(self, x: torch.Tensor):
         assert self.lut_points is not None and self.lut_bases is not None
@@ -196,7 +279,7 @@ class KANLinear(torch.nn.Module):
             torch.Tensor: B-spline bases tensor of shape (batch_size, in_features, grid_size + spline_order).
             """
         assert x.dim() == 2 and x.size(1) == self.in_features
-        if self.use_lut:
+        if self.use_basis_lut:
             if (
                 self.lut_points is None
                 or self.lut_bases is None
@@ -209,6 +292,40 @@ class KANLinear(torch.nn.Module):
             return self._b_splines_from_lut(x)
         return self._eval_b_splines_exact(x)
 
+    def _layer_lut_forward(self, x: torch.Tensor):
+        if (
+            self.layer_lut_values is None
+            or self.layer_lut_points is None
+            or self._layer_lut_grid_reference is None
+            or self._layer_lut_dirty
+            or not torch.equal(self._layer_lut_grid_reference, self.grid)
+        ):
+            self.rebuild_layer_lut()
+
+        points = self.layer_lut_points
+        values = self.layer_lut_values
+        min_pts = points[:, 0]
+        max_pts = points[:, -1]
+        span = torch.clamp(max_pts - min_pts, min=1e-6)
+
+        normed = ((x - min_pts) / span).clamp(0.0, 1.0)
+        indices = normed * (self.lut_size - 1)
+        lower_idx = indices.floor().to(torch.long)
+        upper_idx = torch.clamp(lower_idx + 1, max=self.lut_size - 1)
+        mix = (indices - lower_idx.to(indices.dtype)).unsqueeze(-1)
+
+        lut = values.unsqueeze(0)  # (1, in, lut_size, out)
+        lower_idx_expanded = lower_idx.unsqueeze(-1).unsqueeze(-1).expand(
+            -1, -1, 1, self.out_features
+        )
+        upper_idx_expanded = upper_idx.unsqueeze(-1).unsqueeze(-1).expand_as(
+            lower_idx_expanded
+        )
+        lower_val = torch.gather(lut, 2, lower_idx_expanded).squeeze(2)
+        upper_val = torch.gather(lut, 2, upper_idx_expanded).squeeze(2)
+        interpolated = lower_val + mix * (upper_val - lower_val)
+        return interpolated.sum(dim=1)
+
     def lut_memory_bytes(self) -> int:
         """
         Return the amount of memory (in bytes) occupied by the LUT buffers.
@@ -216,7 +333,14 @@ class KANLinear(torch.nn.Module):
         if not self.use_lut:
             return 0
         total = 0
-        for buf in (self.lut_points, self.lut_bases, self._lut_grid_reference):
+        for buf in (
+            self.lut_points,
+            self.lut_bases,
+            self._lut_grid_reference,
+            self.layer_lut_values,
+            self.layer_lut_points,
+            self._layer_lut_grid_reference,
+        ):
             if buf is not None:
                 total += buf.element_size() * buf.nelement()
         return total
@@ -267,10 +391,13 @@ class KANLinear(torch.nn.Module):
         x = x.reshape(-1, self.in_features)
 
         base_output = F.linear(self.base_activation(x), self.base_weight)
-        spline_output = F.linear(
-            self.b_splines(x).view(x.size(0), -1),
-            self.scaled_spline_weight.view(self.out_features, -1),
-        )
+        if self.use_layer_lut:
+            spline_output = self._layer_lut_forward(x)
+        else:
+            spline_output = F.linear(
+                self.b_splines(x).view(x.size(0), -1),
+                self.scaled_spline_weight.view(self.out_features, -1),
+            )
         output = base_output + spline_output
         
         output = output.reshape(*original_shape[:-1], self.out_features)
