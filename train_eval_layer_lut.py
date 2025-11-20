@@ -87,12 +87,14 @@ def clone_with_layer_lut(trained_model, grid_size, spline_order, lut_size, devic
 def main():
     train_ds, test_ds = build_datasets()
     config = {
-        "epochs": 1,
+        "epochs": 5,
         "batch_size": 64,
         "lr": 1e-3,
         "grid_size": 5,
         "spline_order": 3,
-        "lut_size": 64,
+        "lut_size": 256,
+        # Evaluate with progressively larger LUTs (defaults cover 2..256 in powers of two).
+        "eval_lut_sizes": [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384],
         "train_use_lut": False,
     }
 
@@ -123,21 +125,27 @@ def main():
         f"acc={baseline_metrics['accuracy']:.4f}"
     )
 
-    layer_lut_model = clone_with_layer_lut(
-        trained_model=trained_model,
-        grid_size=config["grid_size"],
-        spline_order=config["spline_order"],
-        lut_size=config["lut_size"],
-        device=device,
-    )
-    lut_metrics = evaluate_model(
-        layer_lut_model, test_ds, device, batch_size=config["batch_size"]
-    )
-    print(
-        "[Eval] Layer-LUT model "
-        f"loss={lut_metrics['loss']:.4f} "
-        f"acc={lut_metrics['accuracy']:.4f}"
-    )
+    eval_lut_sizes = config.get("eval_lut_sizes") or [config["lut_size"]]
+    for lut_size in eval_lut_sizes:
+        if lut_size < 2:
+            print(f"[Eval] Skipping invalid lut_size={lut_size} (<2)")
+            continue
+        layer_lut_model = clone_with_layer_lut(
+            trained_model=trained_model,
+            grid_size=config["grid_size"],
+            spline_order=config["spline_order"],
+            lut_size=lut_size,
+            device=device,
+        )
+        lut_metrics = evaluate_model(
+            layer_lut_model, test_ds, device, batch_size=config["batch_size"]
+        )
+        print(
+            "[Eval] Layer-LUT model "
+            f"(lut_size={lut_size}) "
+            f"loss={lut_metrics['loss']:.4f} "
+            f"acc={lut_metrics['accuracy']:.4f}"
+        )
 
 
 if __name__ == "__main__":
