@@ -48,11 +48,50 @@ def infer_sample_input_shape(dataset):
     return (1, *sample.shape)
 
 
-def print_model_resource_stats(model, sample_input_shape=None):
+def _cleanup_calflops(model):
+    """
+    calflops monkey-patches torch ops; ensure we restore them even if profiling fails.
+    """
+    try:
+        from calflops.calculate_pipline import old_functions
+        from calflops.pytorch_ops import _reload_functionals, _reload_tensor_methods
+    except Exception:
+        return
+
+    try:
+        if old_functions:
+            try:
+                _reload_functionals(old_functions)
+                _reload_tensor_methods(old_functions)
+            except Exception:
+                pass
+        for module in model.modules():
+            for handle_attr in ("__pre_hook_handle__", "__post_hook_handle__", "__flops_handle__"):
+                handle = getattr(module, handle_attr, None)
+                if handle is not None:
+                    try:
+                        handle.remove()
+                    except Exception:
+                        pass
+                    try:
+                        delattr(module, handle_attr)
+                    except Exception:
+                        pass
+            for stat_attr in ("__flops__", "__macs__", "__params__"):
+                if hasattr(module, stat_attr):
+                    try:
+                        delattr(module, stat_attr)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
+def print_model_resource_stats(model, sample_input_shape=None, *, enable_flops=True):
     param_count = count_parameters(model)
     print(f"[Model] Trainable parameters: {param_count}")
     print_lut_memory_stats(model)
-    if sample_input_shape is None:
+    if sample_input_shape is None or not enable_flops:
         return
     if calculate_flops is None:
         print("[Model] calflops not available; skipping FLOP/MAC estimate.")
@@ -72,6 +111,7 @@ def print_model_resource_stats(model, sample_input_shape=None):
         model.macs = macs
     except Exception as exc:
         print(f"[Model] Failed to compute FLOPs via calflops: {exc}")
+        _cleanup_calflops(model)
 
 
 from evaluations import train_and_test_models
@@ -127,10 +167,20 @@ def train_model_generic(model, train_ds, test_ds,device,epochs= 15,path =  "driv
     #return all_train_loss, all_test_loss, all_test_accuracy, all_test_precision, all_test_recall, all_test_f1
 
 
-def simple_epoch_train(model, train_ds, device, epochs=5, batch_size=64, lr=1e-3, test_ds=None):
+def simple_epoch_train(
+    model,
+    train_ds,
+    device,
+    epochs=5,
+    batch_size=64,
+    lr=1e-3,
+    test_ds=None,
+    *,
+    enable_flops=True,
+):
     model.to(device)
     sample_input_shape = infer_sample_input_shape(train_ds)
-    print_model_resource_stats(model, sample_input_shape)
+    print_model_resource_stats(model, sample_input_shape, enable_flops=enable_flops)
     model.train()
     loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
