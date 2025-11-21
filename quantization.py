@@ -26,6 +26,13 @@ from torchvision.datasets import FashionMNIST
 
 import os
 
+from executorch.exir import (
+    to_edge_transform_and_lower,
+    EdgeCompileConfig,
+)
+from executorch.backends.xnnpack.partition.xnnpack_partitioner import XnnpackPartitioner
+
+
 
 def _write_fx_graph(graph, path):
     """Persist FX graph text so it can be inspected offline."""
@@ -146,10 +153,29 @@ def quantize_kkan_small(model, dataset, num_samples: int = 100):
   
   return quantized_model
 
+example_inputs = (torch.randn(1, 1, 28, 28),)
+
 criterion = nn.CrossEntropyLoss()
 
 float_model = KKAN_Small(use_lut=True)
 float_model.load_state_dict(torch.load("models/FashionMNIST_LUT/KKAN (Small) (gs = 5, LUT).pt", weights_only=False).state_dict()) 
+
+
+exp_float = torch.export.export(float_model, example_inputs)
+
+edge_float = to_edge_transform_and_lower(
+    exp_float,
+    partitioner=[XnnpackPartitioner()],
+    compile_config=EdgeCompileConfig(_check_ir_validity=False),
+)
+
+# 8) ExecuTorch-Programm erzeugen
+exec_prog = edge_float.to_executorch()
+
+# 9) Als .pte speichern
+with open("model_float.pte", "wb") as f:
+    exec_prog.write_to_file(f)
+
 
 model = KKAN_Small(use_lut=True)
 model.load_state_dict(torch.load("models/FashionMNIST_LUT/KKAN (Small) (gs = 5, LUT).pt", weights_only=False).state_dict())
@@ -161,6 +187,22 @@ mnist_data = FashionMNIST(root='./data', train=True, download=True, transform=tr
 
 
 quantized_model = quantize_kkan_small(model, mnist_data)
+
+exp_q = torch.export.export(quantized_model, example_inputs)
+
+edge = to_edge_transform_and_lower(
+    exp_q,
+    partitioner=[XnnpackPartitioner()],
+    compile_config=EdgeCompileConfig(_check_ir_validity=False),
+)
+
+# 8) ExecuTorch-Programm erzeugen
+exec_prog = edge.to_executorch()
+
+# 9) Als .pte speichern
+with open("model_int8.pte", "wb") as f:
+    exec_prog.write_to_file(f)
+
 
 mnist_data_test = FashionMNIST(root='./data', train=False, download=True, transform=transform)
 data_loader_test = DataLoader(mnist_data_test, batch_size=64, shuffle=False)
@@ -175,7 +217,7 @@ print("Baseline Float Model Evaluation accuracy: %2.2f, %2.2f"%(top1.avg, top5.a
 # Quantized model size and accuracy
 print("Size of model after quantization")
 # export again to remove unused weights
-example_inputs = (torch.randn(1, 1, 28, 28),)
+
 quantized_model = torch.export.export(quantized_model, example_inputs).module()
 print_size_of_model(quantized_model)
 
@@ -184,3 +226,4 @@ data_loader_test = DataLoader(mnist_data_test, batch_size=1, shuffle=False)
 
 top1, top5 = evaluate(quantized_model, criterion, data_loader_test)
 print("[before serilaization] Evaluation accuracy on test dataset: %2.2f, %2.2f"%(top1.avg, top5.avg))
+
