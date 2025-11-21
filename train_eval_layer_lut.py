@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import FashionMNIST, CIFAR10
 
 from architectures_28x28.KKAN import KKAN_Small
+from architectures_28x28.SimpleModels import MediumCNN
 from generic_train import simple_epoch_train
 
 
@@ -127,14 +128,47 @@ def parse_args():
         default="fashionmnist",
         help="Dataset to use for training/evaluation.",
     )
+    parser.add_argument(
+        "--model",
+        choices=["kkan", "mediumcnn"],
+        default="kkan",
+        help="Model type to train. MediumCNN skips LUT-specific evaluation.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cuda", "cpu"],
+        default="auto",
+        help="Which device to use: auto picks CUDA if available, else CPU.",
+    )
+    parser.add_argument(
+        "--skip-flops",
+        action="store_true",
+        help="Disable FLOP/MAC estimation via calflops (useful if cuDNN init fails).",
+    )
+    parser.add_argument(
+        "--disable-cudnn",
+        action="store_true",
+        help="Disable cuDNN (fallback to native CUDA kernels) to avoid CUDNN_STATUS_NOT_INITIALIZED.",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    global device
+    if args.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        if args.device == "cuda" and not torch.cuda.is_available():
+            print("[Warn] CUDA wurde angefordert, ist aber nicht verfügbar – wechsle auf CPU.")
+            device = torch.device("cpu")
+        else:
+            device = torch.device(args.device)
+    print(f"[Device] Verwende: {device}")
+
     config = {
-        "epochs": 5,
-        "batch_size": 64,
+        "epochs": 150,
+        "batch_size": 128,
         "lr": 1e-3,
         "grid_size": 8,
         "spline_order": 3,
@@ -147,14 +181,37 @@ def main():
 
     train_ds, test_ds, input_specs = build_datasets(dataset=config["dataset"])
 
-    baseline_model = KKAN_Small(
-        grid_size=config["grid_size"],
-        spline_order=config["spline_order"],
-        use_lut=config["train_use_lut"],
-        lut_size=config["lut_size"],
-        in_channels=input_specs["in_channels"],
-        image_size=input_specs["image_size"],
-    )
+    model_choice = args.model.lower()
+    config["enable_flops"] = (model_choice == "kkan") and (not args.skip_flops)
+
+    # cuDNN fallback: MediumCNN on some setups errors with CUDNN_STATUS_NOT_INITIALIZED.
+    # Auto-disable cuDNN for MediumCNN on CUDA unless the user opts out.
+    disable_cudnn = args.disable_cudnn or (model_choice == "mediumcnn" and device.type == "cuda")
+    if disable_cudnn:
+        torch.backends.cudnn.enabled = False
+        torch.backends.cudnn.benchmark = False
+        print("[cuDNN] Disabled (nutzt native CUDA-Kernels; kann etwas langsamer sein).")
+
+    if model_choice == "kkan":
+        baseline_model = KKAN_Small(
+            grid_size=config["grid_size"],
+            spline_order=config["spline_order"],
+            use_lut=config["train_use_lut"],
+            lut_size=config["lut_size"],
+            in_channels=input_specs["in_channels"],
+            image_size=input_specs["image_size"],
+        )
+    elif model_choice == "mediumcnn":
+        baseline_model = MediumCNN(
+            in_channels=input_specs["in_channels"],
+            image_size=input_specs["image_size"],
+            num_classes=10,
+        )
+    else:
+        raise ValueError(f"Unsupported model '{args.model}'")
+
+    if not config["enable_flops"]:
+        print("[Model] Skipping calflops FLOP/MAC estimation for this run.")
 
     train_result = simple_epoch_train(
         baseline_model,
@@ -164,6 +221,7 @@ def main():
         batch_size=config["batch_size"],
         lr=config["lr"],
         test_ds=test_ds,
+        enable_flops=config["enable_flops"],
     )
     trained_model = train_result["model"]
 
@@ -175,6 +233,10 @@ def main():
         f"loss={baseline_metrics['loss']:.4f} "
         f"acc={baseline_metrics['accuracy']:.4f}"
     )
+
+    if model_choice != "kkan":
+        print("[Eval] Skipping layer-LUT evaluation because the selected model does not use LUTs.")
+        return
 
     eval_lut_sizes = config.get("eval_lut_sizes") or [config["lut_size"]]
     for lut_size in eval_lut_sizes:

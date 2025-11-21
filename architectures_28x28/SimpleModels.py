@@ -29,15 +29,18 @@ class SimpleCNN(nn.Module):
         return x
     
 class MediumCNN(nn.Module):
-    def __init__(self):
+    def __init__(self, in_channels: int = 1, image_size: int = 28, num_classes: int = 10):
         super(MediumCNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 5, kernel_size=3, padding=(0, 0))
+        self.conv1 = nn.Conv2d(in_channels, 5, kernel_size=3, padding=(0, 0))
         self.conv2 = nn.Conv2d(5, 10, kernel_size=3, padding=(0, 0))
 
         self.maxpool = nn.MaxPool2d(kernel_size=2)
         
         self.flatten = nn.Flatten()
-        self.fc = nn.Linear(250, 10)
+        self.fc = nn.Linear(
+            self._compute_flat_features(image_size),
+            num_classes,
+        )
         self.name = "CNN (Medium)"
 
     def forward(self, x):
@@ -49,6 +52,21 @@ class MediumCNN(nn.Module):
         x = self.fc(x)
         x = F.log_softmax(x, dim=1)
         return x
+
+    @staticmethod
+    def _conv_output_size(input_size: int, kernel_size: int, stride: int = 1, padding: int = 0, dilation: int = 1) -> int:
+        return (
+            (input_size + 2 * padding - dilation * (kernel_size - 1) - 1) // stride
+            + 1
+        )
+
+    def _compute_flat_features(self, image_size: int) -> int:
+        size = image_size
+        size = self._conv_output_size(size, kernel_size=3, stride=1, padding=0)
+        size = self._conv_output_size(size, kernel_size=2, stride=2, padding=0)
+        size = self._conv_output_size(size, kernel_size=3, stride=1, padding=0)
+        size = self._conv_output_size(size, kernel_size=2, stride=2, padding=0)
+        return self.conv2.out_channels * size * size
 
 class CNN_Big(nn.Module):
     def __init__(self):
