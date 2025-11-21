@@ -246,9 +246,9 @@ def main():
     )
     save_dir = os.path.join("models", dataset_dir)
     os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, f"{trained_model.name}.pt")
-    torch.save(trained_model, save_path)
-    print(f"[Save] Modell gespeichert unter {save_path}")
+    weights_path = os.path.join(save_dir, f"{trained_model.name}.pth")
+    torch.save(trained_model.state_dict(), weights_path)
+    print(f"[Save] Nur Gewichte gespeichert unter {weights_path}")
 
     if model_choice != "kkan":
         print("[Eval] Skipping layer-LUT evaluation because the selected model does not use LUTs.")
