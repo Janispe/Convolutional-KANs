@@ -90,7 +90,7 @@ def main():
         "epochs": 5,
         "batch_size": 64,
         "lr": 1e-3,
-        "grid_size": 5,
+        "grid_size": 8,
         "spline_order": 3,
         "lut_size": 256,
         # Evaluate with progressively larger LUTs (defaults cover 2..256 in powers of two).

@@ -7,6 +7,8 @@ sys.path.append('./kan_convolutional')
 from kan_convolutional.KANConv import KAN_Convolutional_Layer
 from kan_convolutional.KANLinear import KANLinear
 
+_DEFAULT_ACTIVATION = object()
+
 class KKAN_Small(nn.Module):
     def __init__(
         self,
@@ -14,6 +16,7 @@ class KKAN_Small(nn.Module):
         spline_order: int = 3,
         use_lut: bool = False,
         lut_size: int = 4,
+        activation: nn.Module | None | bool = _DEFAULT_ACTIVATION,
     ):
         super().__init__()
         self.conv1 = KAN_Convolutional_Layer(in_channels=1,
@@ -39,6 +42,14 @@ class KKAN_Small(nn.Module):
         self.pool1 = nn.MaxPool2d(
             kernel_size=(2, 2)
         )
+
+        # Allow caller to pick activation; keep tanh as default. Pass False or None to disable.
+        if activation is _DEFAULT_ACTIVATION:
+            self.activation = nn.Tanh()
+        elif activation is False or activation is None:
+            self.activation = None
+        else:
+            self.activation = activation
         
         self.flat = nn.Flatten() 
 
@@ -65,14 +76,20 @@ class KKAN_Small(nn.Module):
 
 
     def forward(self, x):
-        x = self.conv1(x)
+        if self.activation is not None:
+            x = self.activation(self.conv1(x))
+        else:
+            x = self.conv1(x)
 
         x = self.pool1(x)
 
-        x = self.conv2(x)
+        if self.activation is not None:
+            x = self.activation(self.conv2(x))
+        else:
+            x = self.conv2(x)
         x = self.pool1(x)
         x = self.flat(x)
-        x = self.kan1(x) 
+        x = self.kan1(x)
         x = F.log_softmax(x, dim=1)
 
         return x
