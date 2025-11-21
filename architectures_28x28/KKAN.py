@@ -17,10 +17,13 @@ class KKAN_Small(nn.Module):
         use_lut: bool = False,
         lut_size: int = 4,
         activation: nn.Module | None | bool = _DEFAULT_ACTIVATION,
+        in_channels: int = 1,
+        image_size: int = 28,
     ):
         super().__init__()
-        self.conv1 = KAN_Convolutional_Layer(in_channels=1,
-            out_channels= 5,
+        conv_channels = 5
+        self.conv1 = KAN_Convolutional_Layer(in_channels=in_channels,
+            out_channels= conv_channels,
             kernel_size= (3,3),
             grid_size = grid_size,
             spline_order=spline_order,
@@ -29,8 +32,8 @@ class KKAN_Small(nn.Module):
             lut_size=lut_size,
         )
 
-        self.conv2 = KAN_Convolutional_Layer(in_channels=5,
-            out_channels= 5,
+        self.conv2 = KAN_Convolutional_Layer(in_channels=conv_channels,
+            out_channels= conv_channels,
             kernel_size = (3,3),
             grid_size = grid_size,
             spline_order=spline_order,
@@ -54,7 +57,10 @@ class KKAN_Small(nn.Module):
         self.flat = nn.Flatten() 
 
         self.kan1 = KANLinear(
-            125,
+            self._compute_flat_features(
+                image_size=image_size,
+                conv_channels=conv_channels,
+            ),
             10,
             grid_size=grid_size,
             spline_order=spline_order,
@@ -93,6 +99,21 @@ class KKAN_Small(nn.Module):
         x = F.log_softmax(x, dim=1)
 
         return x
+
+    @staticmethod
+    def _conv_output_size(input_size: int, kernel_size: int, stride: int = 1, padding: int = 0, dilation: int = 1) -> int:
+        return (
+            (input_size + 2 * padding - dilation * (kernel_size - 1) - 1) // stride
+            + 1
+        )
+
+    def _compute_flat_features(self, image_size: int, conv_channels: int) -> int:
+        size = image_size
+        size = self._conv_output_size(size, kernel_size=3, stride=1, padding=0)
+        size = self._conv_output_size(size, kernel_size=2, stride=2, padding=0)
+        size = self._conv_output_size(size, kernel_size=3, stride=1, padding=0)
+        size = self._conv_output_size(size, kernel_size=2, stride=2, padding=0)
+        return conv_channels * size * size
 
 class KKAN_Convolutional_Network(nn.Module):
     def __init__(self, grid_size: int = 5):

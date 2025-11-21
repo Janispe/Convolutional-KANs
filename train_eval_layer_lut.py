@@ -1,7 +1,8 @@
+import argparse
 import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
-from torchvision.datasets import FashionMNIST
+from torchvision.datasets import FashionMNIST, CIFAR10
 
 from architectures_28x28.KKAN import KKAN_Small
 from generic_train import simple_epoch_train
@@ -10,13 +11,35 @@ from generic_train import simple_epoch_train
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def build_datasets():
-    transform = transforms.Compose(
-        [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
-    )
-    train = FashionMNIST(root="./data", train=True, download=True, transform=transform)
-    test = FashionMNIST(root="./data", train=False, download=True, transform=transform)
-    return train, test
+def build_datasets(dataset: str = "fashionmnist"):
+    """
+    Return train/test datasets plus input specs for the model.
+    """
+    ds_name = dataset.lower()
+    if ds_name in ("fashionmnist", "fashion-mnist", "fmnist"):
+        transform = transforms.Compose(
+            [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
+        )
+        train = FashionMNIST(
+            root="./data", train=True, download=True, transform=transform
+        )
+        test = FashionMNIST(
+            root="./data", train=False, download=True, transform=transform
+        )
+        input_specs = {"in_channels": 1, "image_size": 28}
+    elif ds_name == "cifar10":
+        cifar_mean = (0.4914, 0.4822, 0.4465)
+        cifar_std = (0.2470, 0.2435, 0.2616)
+        transform = transforms.Compose(
+            [transforms.ToTensor(), transforms.Normalize(cifar_mean, cifar_std)]
+        )
+        train = CIFAR10(root="./data", train=True, download=True, transform=transform)
+        test = CIFAR10(root="./data", train=False, download=True, transform=transform)
+        input_specs = {"in_channels": 3, "image_size": 32}
+    else:
+        raise ValueError(f"Unsupported dataset '{dataset}'")
+
+    return train, test, input_specs
 
 
 @torch.no_grad()
@@ -42,7 +65,16 @@ def evaluate_model(model, dataset, device, batch_size=128):
     return {"loss": avg_loss, "accuracy": accuracy}
 
 
-def clone_with_layer_lut(trained_model, grid_size, spline_order, lut_size, device):
+def clone_with_layer_lut(
+    trained_model,
+    grid_size,
+    spline_order,
+    lut_size,
+    device,
+    *,
+    in_channels: int,
+    image_size: int,
+):
     """
     Create a copy of the trained weights inside a KKAN_Small variant
     whose layers run with the full layer-level LUT path.
@@ -52,6 +84,9 @@ def clone_with_layer_lut(trained_model, grid_size, spline_order, lut_size, devic
         spline_order=spline_order,
         use_lut="layer",
         lut_size=lut_size,
+        in_channels=in_channels,
+        image_size=image_size,
+        activation=trained_model.activation,
     )
     load_result = layer_model.load_state_dict(
         trained_model.state_dict(), strict=False
@@ -84,8 +119,19 @@ def clone_with_layer_lut(trained_model, grid_size, spline_order, lut_size, devic
     return layer_model
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train KKAN with/without LUT then eval with layer LUT.")
+    parser.add_argument(
+        "--dataset",
+        choices=["fashionmnist", "cifar10"],
+        default="fashionmnist",
+        help="Dataset to use for training/evaluation.",
+    )
+    return parser.parse_args()
+
+
 def main():
-    train_ds, test_ds = build_datasets()
+    args = parse_args()
     config = {
         "epochs": 5,
         "batch_size": 64,
@@ -96,13 +142,18 @@ def main():
         # Evaluate with progressively larger LUTs (defaults cover 2..256 in powers of two).
         "eval_lut_sizes": [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384],
         "train_use_lut": False,
+        "dataset": args.dataset.lower(),
     }
+
+    train_ds, test_ds, input_specs = build_datasets(dataset=config["dataset"])
 
     baseline_model = KKAN_Small(
         grid_size=config["grid_size"],
         spline_order=config["spline_order"],
         use_lut=config["train_use_lut"],
         lut_size=config["lut_size"],
+        in_channels=input_specs["in_channels"],
+        image_size=input_specs["image_size"],
     )
 
     train_result = simple_epoch_train(
@@ -136,6 +187,8 @@ def main():
             spline_order=config["spline_order"],
             lut_size=lut_size,
             device=device,
+            in_channels=input_specs["in_channels"],
+            image_size=input_specs["image_size"],
         )
         lut_metrics = evaluate_model(
             layer_lut_model, test_ds, device, batch_size=config["batch_size"]
