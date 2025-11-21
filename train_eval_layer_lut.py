@@ -1,4 +1,5 @@
 import argparse
+import os
 import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
@@ -167,7 +168,7 @@ def main():
     print(f"[Device] Verwende: {device}")
 
     config = {
-        "epochs": 150,
+        "epochs": 20,
         "batch_size": 128,
         "lr": 1e-3,
         "grid_size": 8,
@@ -233,6 +234,21 @@ def main():
         f"loss={baseline_metrics['loss']:.4f} "
         f"acc={baseline_metrics['accuracy']:.4f}"
     )
+
+    # Persist the trained float model incl. basic metrics for later inspection.
+    trained_model.train_losses = train_result["train_losses"]
+    trained_model.test_loss = baseline_metrics["loss"]
+    trained_model.test_accuracy = baseline_metrics["accuracy"]
+    trained_model.training_time = train_result["training_time_seconds"] / 60.0
+
+    dataset_dir = {"fashionmnist": "FashionMNIST", "cifar10": "CIFAR10"}.get(
+        config["dataset"], config["dataset"]
+    )
+    save_dir = os.path.join("models", dataset_dir)
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"{trained_model.name}.pt")
+    torch.save(trained_model, save_path)
+    print(f"[Save] Modell gespeichert unter {save_path}")
 
     if model_choice != "kkan":
         print("[Eval] Skipping layer-LUT evaluation because the selected model does not use LUTs.")
