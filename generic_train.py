@@ -81,6 +81,7 @@ import time
 import torch
 import os
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 import numpy as np
 def train_model_generic(model, train_ds, test_ds,device,epochs= 15,path =  "drive/MyDrive/KANs/models"):
@@ -139,7 +140,9 @@ def simple_epoch_train(model, train_ds, device, epochs=5, batch_size=64, lr=1e-3
 
     for epoch in range(epochs):
         cumulative_loss = 0.0
-        for inputs, targets in loader:
+        progress_bar = tqdm(loader, desc=f"[SimpleTrain] Epoch {epoch + 1}/{epochs}", unit="batch", leave=False)
+        seen_samples = 0
+        for inputs, targets in progress_bar:
             inputs, targets = inputs.to(device), targets.to(device)
             optimizer.zero_grad()
             logits = model(inputs)
@@ -147,6 +150,10 @@ def simple_epoch_train(model, train_ds, device, epochs=5, batch_size=64, lr=1e-3
             loss.backward()
             optimizer.step()
             cumulative_loss += loss.item() * inputs.size(0)
+            seen_samples += inputs.size(0)
+            if seen_samples > 0:
+                progress_bar.set_postfix(avg_loss=cumulative_loss / seen_samples)
+        progress_bar.close()
 
         avg_loss = cumulative_loss / len(loader.dataset)
         train_losses.append(avg_loss)
